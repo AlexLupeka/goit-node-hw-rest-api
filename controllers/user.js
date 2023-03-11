@@ -1,27 +1,38 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-
+const gravatar = require("gravatar");
+const path = require("path");
 const { User } = require("../models/user");
+const fs = require("fs/promises");
+const jimp = require("jimp");
+const cover = require("@jimp/plugin-cover");
 
-const { httpError, asyncWrapper } = require("../helpers");
+const { HttpError, asyncWrapper } = require("../helpers");
 
 const { SECRET_KEY } = process.env;
 
-const singup = async (req, res) => {
+const avatarsDir = path.join(__dirname, "../", "public", "avatars");
+
+const register = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });
 
   if (user) {
-    throw httpError(409, "Email in use");
+    throw HttpError(409, "Email alredy is use");
   }
 
-  const hashPassword = await bcrypt.hash(password, 20);
+  const hashPassword = await bcrypt.hash(password, 10);
+  const avatarURL = gravatar.url(email);
 
-  const newUser = await User.create({ ...req.body, password: hashPassword });
+  const newUser = await User.create({
+    ...req.body,
+    password: hashPassword,
+    avatarURL,
+  });
 
   res.status(201).json({
     email: newUser.email,
-    subscription: newUser.subscription,
+    name: newUser.name,
   });
 };
 
@@ -29,11 +40,11 @@ const login = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });
   if (!user) {
-    throw httpError(401, "Email or password is wrong");
+    throw HttpError(401, "Email or password invalid");
   }
   const passwordCompare = await bcrypt.compare(password, user.password);
   if (!passwordCompare) {
-    throw httpError(401, "Email or password is wrong");
+    throw HttpError(401, "Email or password invalid");
   }
 
   const payload = {
@@ -53,29 +64,42 @@ const getCurrent = async (req, res) => {
   res.json({ email, name });
 };
 
-const changeSubscription = async (req, res) => {
-  const { _id } = req.user;
-  const { subscription } = req.body;
-
-  const user = await User.findByIdAnd(_id, { subscription }, { new: true });
-
-  if (!user) {
-    throw httpError(404, "Not found");
-  }
-  res.status(200).json(user);
-};
-
 const logout = async (req, res) => {
   const { _id } = req.user;
-  await User.findByIdAndRemove(_id, { token: null });
+  await User.findByIdAndUpdate(_id, { token: "" });
 
-  res.status(204).json();
+  res.json({ message: "Logout succsess" });
+};
+
+const updateAvatar = async (req, res) => {
+  const { _id } = req.user;
+  const { path: tempUpload, originalname } = req.file;
+  const filename = `${_id}_${originalname}`;
+  const resultUpload = path.join(avatarsDir, filename);
+  await fs.rename(tempUpload, resultUpload);
+  const avatarURL = path.join("avatars", filename);
+  const image = await jimp.read(resultUpload);
+
+  image.cover(
+    250,
+    250,
+    jimp.HORIZONTAL_ALIGN_CENTER | jimp.VERTICAL_ALIGN_MIDDLE,
+    cover
+  );
+
+  await image.writeAsync(resultUpload);
+  await User.findByIdAndUpdate(_id, { avatarURL });
+
+  if (!req.user) {
+    throw HttpError(401, "Email or password invalid");
+  }
+  res.json({ avatarURL });
 };
 
 module.exports = {
-  singup: asyncWrapper(singup),
+  register: asyncWrapper(register),
   login: asyncWrapper(login),
   getCurrent: asyncWrapper(getCurrent),
-  changeSubscription: asyncWrapper(changeSubscription),
   logout: asyncWrapper(logout),
+  updateAvatar: asyncWrapper(updateAvatar),
 };
